@@ -166,7 +166,17 @@ public class WebHandler {
                     List<DBChatReport> chatReports = new ArrayList<>();
                     List<DBCanvasReport> canvasReports = new ArrayList<>();
                     List<Faction> factions = App.getDatabase().getFactionsForUID(profileUser.getId()).stream().map(Faction::new).collect(Collectors.toList());
-                    Map<String, String> keys = new TreeMap<>(App.getDatabase().getUserKeys(profileUser.getId()));
+                    Map<String, String> keys = new TreeMap<>(
+                        Comparator.comparing((String key) -> {
+                            var numbersOnly = key.replaceAll("[^\\d.]", "");
+                            if (numbersOnly.isEmpty()) {
+                                return 0.0;
+                            } else {
+                                return Double.parseDouble(numbersOnly);
+                            }
+                        }).thenComparing(Comparator.naturalOrder())
+                    );
+                    keys.putAll(App.getDatabase().getUserKeys(profileUser.getId()));
 
                     m.put("snip_mode", App.getSnipMode());
                     m.put("requested_self", requested_self);
@@ -1341,11 +1351,11 @@ public class WebHandler {
 
         if (discordName != null) {
             if (discordName.contains("#") && !discordName.matches("^.{2,32}#\\d{4}$")){
-                sendBadRequest(exchange, "name isn't in the format '{name}#{discriminator}'");
+                sendBadRequest(exchange, "Name isn't in the format '{name}#{discriminator}'");
                 return;
             }
-            if (!discordName.contains("#") && !discordName.matches("^[A-Za-z0-9._]{2,32}$")){
-                sendBadRequest(exchange, "name isn't in the discord tag format (only english letters, numbers, periods and underlines allowed)");
+            if (!discordName.contains("#") && !discordName.matches("^[a-z0-9._]{2,32}$")){
+                sendBadRequest(exchange, "Name isn't in the discord tag format (only lowercase english letters, digits, periods and underlines allowed)");
                 return;
             }
         }
@@ -1660,12 +1670,20 @@ public class WebHandler {
         } else if (!name.matches("[a-zA-Z0-9_\\-]+")) {
             respond(exchange, StatusCodes.BAD_REQUEST, new space.pxls.server.packets.http.Error("bad_username", "Username contains invalid characters"));
             return;
-        } else if (!discord.isEmpty() && !discord.matches("^.+?#\\d{4}")) {
-            respond(exchange, StatusCodes.BAD_REQUEST, new space.pxls.server.packets.http.Error("bad_discord", "Discord tag contains invalid characters"));
-            return;
-        } else if (!App.getUserManager().isValidSignupToken(token)) {
+        } else  if (!App.getUserManager().isValidSignupToken(token)) {
             respond(exchange, StatusCodes.BAD_REQUEST, new space.pxls.server.packets.http.Error("bad_token", "Invalid signup token"));
             return;
+        }
+
+        if (!discord.isEmpty()) {
+            if (discord.contains("#") && !discord.matches("^.{2,32}#\\d{4}$")){
+                respond(exchange, StatusCodes.BAD_REQUEST, new space.pxls.server.packets.http.Error("bad_discord", "Discord name isn't in the format '{name}#{discriminator}'"));
+                return;
+            }
+            if (!discord.contains("#") && !discord.matches("^[a-z0-9._]{2,32}$")){
+                respond(exchange, StatusCodes.BAD_REQUEST, new space.pxls.server.packets.http.Error("bad_discord", "Discord name isn't in the discord tag format (only lowercase english letters, digits, periods and underlines allowed)"));
+                return;
+            }
         }
 
         String ip = exchange.getAttachment(IPReader.IP);
