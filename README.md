@@ -12,6 +12,8 @@
 
 Pxls is a collaborative canvas where users can place one pixel from a limited palette at a time, inspired by Reddit's [r/Place][place] experiment.
 
+This repository holds the front end web client. The back end can be found [here][frontend].
+
 **Note:** A Docker image is available at [aneurinprice/docker-pxls.space][docker] and on [Docker Hub][dockerhub].
 
 # Installation
@@ -60,7 +62,7 @@ Run with `java -jar pxls*.jar`
 * The configuration file uses [HOCON][hocon].
 * Unspecified configuration values will use built-in defaults from `resources/reference.conf`.
 * Automatic backups of `board.dat` are saved every five minutes to `backups/` in the configured storage directory, as well as before exiting (with `CTRL + C`).
-* The `Symbols` template style uses the reference palette configuration. See [here](developer.md#symbols-template-style) to modify or remove.
+* The `Symbols` template style uses the reference palette configuration. See [here](docs/developer.md#symbols-template-style) to modify or remove.
 
 ## Configuring CAPTCHA
 
@@ -147,6 +149,7 @@ Commands can be entered into the running instance through standard input.
 
 
 [place]: https://reddit.com/r/place/
+[frontend]: https://github.com/pxlsspace/pxls-web/
 [docker]: https://github.com/aneurinprice/docker-pxls.space
 [dockerhub]: https://hub.docker.com/r/m08y/docker-pxls.space
 [actions]: https://github.com/pxlsspace/Pxls/actions/workflows/maven.yml

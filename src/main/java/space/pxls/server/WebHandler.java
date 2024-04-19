@@ -4,7 +4,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import kong.unirest.UnirestException;
-import com.mitchellbosecke.pebble.PebbleEngine;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.server.handlers.Cookie;
 import io.undertow.server.handlers.CookieImpl;
@@ -15,6 +14,7 @@ import io.undertow.util.*;
 import space.pxls.App;
 import space.pxls.auth.*;
 import space.pxls.data.*;
+import space.pxls.palette.Color;
 import space.pxls.server.packets.http.Error;
 import space.pxls.server.packets.http.*;
 import space.pxls.server.packets.socket.*;
@@ -32,11 +32,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 public class WebHandler {
-    private PebbleEngine engine;
     private Map<String, AuthService> services = new ConcurrentHashMap<>();
-    public static final String TEMPLATE_PROFILE = "public/pebble_templates/profile.html";
-    public static final String TEMPLATE_40X = "public/pebble_templates/40x.html";
-    public static final String TEMPLATE_INDEX = "public/pebble_templates/index.html";
 
     public WebHandler() {
         addServiceIfAvailable("reddit", new RedditAuthService("reddit"));
@@ -45,182 +41,6 @@ public class WebHandler {
         addServiceIfAvailable("vk", new VKAuthService("vk"));
         addServiceIfAvailable("tumblr", new TumblrAuthService("tumblr"));
         addServiceIfAvailable("twitch", new TwitchAuthService("twitch"));
-
-        engine = new PebbleEngine.Builder().build();
-    }
-
-    private String fileToString(File f) {
-        try {
-            BufferedReader br = new BufferedReader(new FileReader(f));
-            String s = "";
-            String line;
-            while ((line = br.readLine()) != null) {
-                s += line + "\n";
-            }
-            br.close();
-            return s;
-        } catch (IOException e) {
-            return "";
-        }
-    }
-
-    private String fileToString(String s) {
-        return fileToString(new File(s));
-    }
-
-    private String resourceToString(String r) {
-        try {
-            InputStream in = getClass().getResourceAsStream(r);
-            BufferedReader br = new BufferedReader(new InputStreamReader(in));
-            String s = "";
-            String line;
-            while ((line = br.readLine()) != null) {
-                s += line + "\n";
-            }
-            return s;
-        } catch (IOException e) {
-            return "";
-        }
-    }
-
-    public void index(HttpServerExchange exchange) {
-        Locale locale = Util.negotiateLocale(exchange);
-        String languageTag = locale.toLanguageTag();
-
-        File index_cache = new File(App.getStorageDir().resolve("index_" + languageTag + "_cache.html").toString());
-        if (index_cache.exists()) {
-            exchange.getResponseHeaders().put(Headers.CONTENT_LANGUAGE, languageTag);
-            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/html");
-            exchange.getResponseSender().send(fileToString(index_cache));
-            return;
-        }
-        
-        Map<String,Object> variables = new HashMap<>();
-
-        String[] keys = {"title", "head", "info", "faq"};
-        for (String p : keys) {
-            String r = App.getConfig().getString("html." + p);
-            if (r == null) {
-                r = "";
-            }
-            variables.put(p, r);
-        }
-        try {
-            FileWriter fw = new FileWriter(index_cache);
-            engine.getTemplate(TEMPLATE_INDEX).evaluate(fw, variables, locale);
-            fw.flush();
-            fw.close();
-            index(exchange); // we created the file, now output it!
-        } catch (IOException e) {
-            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/html");
-            exchange.getResponseSender().send("error");
-            return;
-        }
-    }
-
-    public void view40x(HttpServerExchange exchange, int x, User user) {
-        if (x < 100) x = x + 400;
-        Map<String,Object> m = new HashMap<>();
-        m.put("err", x);
-        if (user != null) {
-            m.put("requesting_user", x);
-        }
-        String toRet = String.format("<p style=\"text-align: center;\">Socc broke the %d page! Let someone know please :) <a href=\"/\">Back to Root</a></p>", x);
-        try {
-            Writer writer = new StringWriter();
-            
-            Locale locale = Util.negotiateLocale(exchange);
-            String languageTag = locale.toLanguageTag();
-
-            engine.getTemplate(TEMPLATE_40X).evaluate(writer, m, locale);
-            toRet = writer.toString();
-
-            exchange.getResponseHeaders().put(Headers.CONTENT_LANGUAGE, languageTag);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        exchange.setStatusCode(x);
-        exchange.getResponseSender().send(toRet);
-    }
-
-    public void profileView(HttpServerExchange exchange) {
-        final User user = exchange.getAttachment(AuthReader.USER);
-        if (user == null) {
-            view40x(exchange, 403, null);
-        } else {
-            PathTemplateMatch match = exchange.getAttachment(PathTemplateMatch.ATTACHMENT_KEY);
-            String requested = match.getParameters().compute("who", (k, s) -> (s == null || s.isEmpty()) ? user.getName() : s);
-            boolean requested_self = user.getName().equals(requested); // usernames are case-sensitive, we can use #equals relatively safely.
-            User profileUser = requested_self ? user : App.getUserManager().getByName(requested);
-
-            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/html");
-
-            HashMap<String,Object> m = new HashMap<>();
-            m.put("requesting_user", user);
-
-            if (profileUser == null) {
-                view40x(exchange, 404, user);
-            } else {
-                String toRet = "<p style=\"text-align: center;\">Socc probably broke something... let someone know please.</p>";
-                try {
-                    List<DBChatReport> chatReports = new ArrayList<>();
-                    List<DBCanvasReport> canvasReports = new ArrayList<>();
-                    List<Faction> factions = App.getDatabase().getFactionsForUID(profileUser.getId()).stream().map(Faction::new).collect(Collectors.toList());
-                    Map<String, String> keys = new TreeMap<>(
-                        Comparator.comparing((String key) -> {
-                            var numbersOnly = key.replaceAll("[^\\d.]", "");
-                            if (numbersOnly.isEmpty()) {
-                                return 0.0;
-                            } else {
-                                return Double.parseDouble(numbersOnly);
-                            }
-                        }).thenComparing(Comparator.naturalOrder())
-                    );
-                    keys.putAll(App.getDatabase().getUserKeys(profileUser.getId()));
-
-                    m.put("snip_mode", App.getSnipMode());
-                    m.put("requested_self", requested_self);
-                    m.put("profile_of", profileUser);
-                    m.put("factions", factions);
-                    m.put("palette", App.getPalette().getColors().stream().map(color -> color.getValue()).collect(Collectors.toList()));
-                    m.put("route_root", requested_self ? "/profile" : String.format("/profile/%s", requested));
-                    m.put("keys", keys);
-
-                    if (requested_self) {
-                        try {
-                            chatReports = App.getDatabase().getChatReportsFromUser(profileUser.getId());
-                            canvasReports = App.getDatabase().getCanvasReportsFromUser(profileUser.getId());
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                        m.put("requesting_user_canvas_pixels", user.getPixelCount());
-                        m.put("requesting_user_alltime_pixels", user.getAllTimePixelCount());
-                        m.put("new_fac_min_pixels", App.getConfig().getInt("factions.minPixelsToCreate"));
-                        m.put("max_faction_tag_length", App.getConfig().getInt("factions.maxTagLength"));
-                        m.put("max_faction_name_length", App.getConfig().getInt("factions.maxNameLength"));
-                        m.put("chat_reports", chatReports);
-                        m.put("chat_reports_open_count", chatReports.stream().filter(dbChatReport -> !dbChatReport.closed).count());
-                        m.put("canvas_reports", canvasReports);
-                        m.put("canvas_reports_open_count", canvasReports.stream().filter(dbCanvasReport -> !dbCanvasReport.closed).count());
-                    }
-
-                    Locale locale = Util.negotiateLocale(exchange);
-                    String languageTag = locale.toLanguageTag();
-
-                    Writer writer = new StringWriter();
-                    engine.getTemplate(TEMPLATE_PROFILE).evaluate(writer, m, locale);
-                    toRet = writer.toString();
-
-                    exchange.getResponseHeaders().put(Headers.CONTENT_LANGUAGE, languageTag);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-
-                exchange.setStatusCode(200);
-                exchange.getResponseSender().send(toRet);
-            }
-
-        }
     }
 
     public void getRequestingUserFactions(HttpServerExchange exchange) throws Exception {
@@ -1540,6 +1360,14 @@ public class WebHandler {
         exchange.endExchange();
     }
 
+    private void sendNotFound(HttpServerExchange exchange) {
+        sendNotFound(exchange, "");
+    }
+
+    private void sendNotFound(HttpServerExchange exchange, String details) {
+        send(StatusCodes.NOT_FOUND, exchange, details);
+    }
+
     private void sendBadRequest(HttpServerExchange exchange) {
         sendBadRequest(exchange, "");
     }
@@ -1757,6 +1585,11 @@ public class WebHandler {
                     .setExpires(pastCalendar.getTime())
             );
 
+            String protocol = App.getConfig().getBoolean("https") ? "https" : "http";
+            String host = App.getConfig().getString("host");
+            int frontEndPort = App.getConfig().getInt("frontEndPort");
+            String doneBase = String.format("%s://%s:%d/auth_done.html", protocol, host, frontEndPort);
+
             if (!redirect && exchange.getQueryParameters().get("json") == null) {
                 exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/html");
                 exchange.getResponseSender().send("<!DOCTYPE html><html><head><title>Pxls Login</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0\"/></head><body><a style=\"font-size:2em;font-weight:bold;\" href=\"" + exchange.getRequestURI() + "?" + exchange.getQueryString() + "\">Finish Login</a><br>Hold down long on that link and select to open with pxls app.</body>");
@@ -1769,7 +1602,7 @@ public class WebHandler {
                 String error = exchange.getQueryParameters().get("error").element();
                 if (error.equals("access_denied")) error = "Authentication denied by user";
                 if (redirect) {
-                    redirect(exchange, "/auth_done.html?nologin=1");
+                    redirect(exchange, doneBase + "?nologin=1");
                 } else {
                     respond(exchange, StatusCodes.UNAUTHORIZED, new space.pxls.server.packets.http.Error("oauth_error", error));
                 }
@@ -1785,7 +1618,7 @@ public class WebHandler {
             String code = extractOAuthCode(exchange);
             if (code == null) {
                 if (redirect) {
-                    redirect(exchange, "/auth_done.html?nologin=1");
+                    redirect(exchange, doneBase + "?nologin=1");
                 } else {
                     respond(exchange, StatusCodes.BAD_REQUEST, new space.pxls.server.packets.http.Error("bad_code", "No OAuth code specified"));
                 }
@@ -1815,7 +1648,7 @@ public class WebHandler {
                     if (service.isRegistrationEnabled()) {
                         String signUpToken = App.getUserManager().generateUserCreationToken(new UserLogin(id, identifier));
                         if (redirect) {
-                            redirect(exchange, String.format("/auth_done.html?token=%s&signup=true", encodedURIComponent(signUpToken)));
+                            redirect(exchange, String.format(doneBase + "?token=%s&signup=true", encodedURIComponent(signUpToken)));
                         } else {
                             respond(exchange, StatusCodes.OK, new AuthResponse(signUpToken, true));
                         }
@@ -1828,7 +1661,7 @@ public class WebHandler {
                     String loginToken = App.getUserManager().logIn(user, ip);
                     setAuthCookie(exchange, loginToken, 24);
                     if (redirect) {
-                        redirect(exchange, String.format("/auth_done.html?token=%s&signup=false", encodedURIComponent(loginToken)));
+                        redirect(exchange, String.format(doneBase + "?token=%s&signup=false", encodedURIComponent(loginToken)));
                     } else {
                         respond(exchange, StatusCodes.OK, new AuthResponse(loginToken, false));
                     }
@@ -1904,9 +1737,14 @@ public class WebHandler {
             App.getConfig().getList("chat.customEmoji").unwrapped(),
             App.getConfig().getString("cors.proxyBase"),
             App.getConfig().getString("cors.proxyParam"),
+            new CanvasInfo.LegalInfo(
+                App.getConfig().getString("legal.termsUrl"),
+                App.getConfig().getString("legal.privacyUrl")
+            ),
             App.getConfig().getString("chat.ratelimitMessage"),
             App.getConfig().getInt("chat.linkMinimumPixelCount"),
-            App.getConfig().getBoolean("chat.linkSendToStaff")
+            App.getConfig().getBoolean("chat.linkSendToStaff"),
+            App.getConfig().getBoolean("chat.defaultExternalLinkPopup")
         )));
     }
 
@@ -2100,6 +1938,51 @@ public class WebHandler {
             exchange.getResponseSender().send(App.getGson().toJson(new WhoAmI(user.getName(), user.getId())));
         } else {
             exchange.getResponseSender().send(App.getGson().toJson(new WhoAmI("unauthed", -1)));
+        }
+    }
+
+    public void profile(HttpServerExchange exchange) {
+        exchange.getResponseHeaders()
+                .put(Headers.CONTENT_TYPE, "application/json");
+
+        User self = exchange.getAttachment(AuthReader.USER);
+        User user = self;
+
+        // get user query param
+        Deque<String> usernameQ = exchange.getQueryParameters().get("username");
+        String username;
+        if (usernameQ != null && !usernameQ.isEmpty()) {
+            username = usernameQ.element();
+            user = App.getUserManager().getByName(username);
+        }
+
+        if (user == null) {
+            sendNotFound(exchange, "USER_NOT_FOUND");
+            return;
+        }
+
+        var selfProfileMinimal = self.toProfileMinimal();
+        var palette = App.getPalette().getColors().stream().map(Color::getValue).collect(Collectors.joining(","));
+        var snipMode = App.getSnipMode();
+
+        if (user == self) {
+            var userProfile = user.toProfile();
+            var newFactionMinPixels = App.getConfig().getInt("factions.minPixelsToCreate");
+            var maxFactionTagLength = App.getConfig().getInt("factions.maxTagLength");
+            var maxFactionNameLength = App.getConfig().getInt("factions.maxNameLength");
+            var canvasReports = App.getDatabase().getCanvasReportsFromUser(user.getId()).stream().map(DBCanvasReport::toProfileReport).toList();
+            var chatReports = App.getDatabase().getChatReportsFromUser(user.getId()).stream().map(DBChatReport::toProfileReport).toList();
+            var userKeys = App.getDatabase().getUserKeys(user.getId());
+
+            var profileResponse = new ProfileResponse(userProfile, selfProfileMinimal, palette, newFactionMinPixels, maxFactionTagLength, maxFactionNameLength, canvasReports, chatReports, snipMode, userKeys);
+
+            exchange.getResponseSender().send(App.getGson().toJson(profileResponse));
+        } else {
+            var userProfileOther = user.toProfileOther();
+
+            var profileResponseOther = new ProfileResponseOther(userProfileOther, selfProfileMinimal, palette, snipMode);
+
+            exchange.getResponseSender().send(App.getGson().toJson(profileResponseOther));
         }
     }
 

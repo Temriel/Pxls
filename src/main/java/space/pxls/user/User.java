@@ -2,10 +2,14 @@ package space.pxls.user;
 
 import io.undertow.websockets.core.WebSocketChannel;
 import space.pxls.App;
+import space.pxls.data.DBFaction;
 import space.pxls.data.DBUser;
 import space.pxls.data.DBUserPixelCounts;
 import space.pxls.server.packets.chat.Badge;
 import space.pxls.server.packets.chat.ServerChatUserUpdateBuilder;
+import space.pxls.server.packets.http.UserProfile;
+import space.pxls.server.packets.http.UserProfileMinimal;
+import space.pxls.server.packets.http.UserProfileOther;
 import space.pxls.server.packets.socket.ClientUndo;
 import space.pxls.server.packets.chat.ServerChatBan;
 import space.pxls.server.packets.socket.ServerRename;
@@ -394,7 +398,7 @@ public class User {
     }
 
     public boolean isPermaBanned() {
-        return banExpiryTime == 0;
+        return banExpiryTime != null && banExpiryTime == 0;
     }
 
     private void setBanExpiryTime(Integer timeFromNowSeconds) {
@@ -863,5 +867,97 @@ public class User {
     public static User fromDBUser(DBUser user) {
         List<Role> roles = App.getDatabase().getUserRoles(user.id);
         return new User(user.id, user.stacked, user.username, user.signup_time, user.cooldownExpiry, roles, user.loginWithIP, user.pixelCount, user.pixelCountAllTime, user.banExpiry, user.shadowBanned, user.isPermaChatbanned, user.chatbanExpiry, user.chatbanReason, user.chatNameColor, user.displayedFaction, user.discordName, user.factionBlocked);
+    }
+
+    public UserProfile toProfile() {
+        List<DBFaction> factions = App.getDatabase().getFactionsForUID(getId());
+        List<ProfileFaction> profileFactions = new ArrayList<>();
+        for (DBFaction dbFaction : factions) {
+            String ownerName = App.getDatabase().getUserByID(dbFaction.owner).get().username;
+            var optionalFaction = FactionManager.getInstance().getByID(dbFaction.id);
+            if (optionalFaction.isEmpty()) {
+                continue;
+            }
+            var members = optionalFaction.get().fetchMembersMinimal();
+            var bans = optionalFaction.get().fetchBansMinimal();
+            profileFactions.add(new ProfileFaction(
+                    dbFaction.id,
+                    dbFaction.name,
+                    dbFaction.tag,
+                    dbFaction.color,
+                    dbFaction.owner,
+                    ownerName,
+                    dbFaction.canvasCode,
+                    dbFaction.created.getTime(),
+                    members,
+                    bans
+            ));
+        }
+        return new UserProfile(
+                id,
+                name,
+                signup_time.getTime(),
+                pixelCount,
+                pixelCountAllTime,
+                roles,
+                displayedFaction,
+                profileFactions,
+                isBanned(),
+                isPermaBanned(),
+                banExpiryTime,
+                isChatbanned(),
+                isPermaChatbanned,
+                chatbanExpiryTime,
+                factionBlocked,
+                discordName
+        );
+    }
+
+    public UserProfileMinimal toProfileMinimal() {
+        return new UserProfileMinimal(
+                id,
+                name,
+                pixelCountAllTime
+        );
+    }
+
+    public UserProfileOther toProfileOther() {
+        List<DBFaction> factions = App.getDatabase().getFactionsForUID(getId()).stream().filter(dbFaction -> dbFaction.id == this.displayedFaction).toList();
+        List<ProfileFactionOther> profileFactions = new ArrayList<>();
+        for (DBFaction dbFaction : factions) {
+            String ownerName = App.getDatabase().getUserByID(dbFaction.owner).get().username;
+            var optionalFaction = FactionManager.getInstance().getByID(dbFaction.id);
+            if (optionalFaction.isEmpty()) {
+                continue;
+            }
+            profileFactions.add(new ProfileFactionOther(
+                    dbFaction.id,
+                    dbFaction.name,
+                    dbFaction.tag,
+                    dbFaction.color,
+                    dbFaction.owner,
+                    ownerName,
+                    dbFaction.canvasCode,
+                    dbFaction.created.getTime()
+            ));
+        }
+        return new UserProfileOther(
+                id,
+                name,
+                signup_time.getTime(),
+                pixelCount,
+                pixelCountAllTime,
+                roles,
+                displayedFaction,
+                profileFactions,
+                isBanned(),
+                isPermaBanned(),
+                banExpiryTime,
+                isChatbanned(),
+                isPermaChatbanned,
+                chatbanExpiryTime,
+                factionBlocked,
+                discordName
+        );
     }
 }
