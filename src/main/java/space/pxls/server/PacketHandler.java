@@ -118,7 +118,6 @@ public class PacketHandler {
         if (obj instanceof ClientShadowBanMe) handleShadowBanMe(channel, user, ((ClientShadowBanMe) obj));
         if (obj instanceof ClientBanMe) handleBanMe(channel, user, ((ClientBanMe) obj));
         if (App.isChatEnabled()) {
-            if (obj instanceof ClientChatHistory && user.hasPermission("chat.history") && !user.isBanned()) handleChatHistory(channel, user, ((ClientChatHistory) obj));
             if (obj instanceof ClientChatbanState) handleChatbanState(channel, user, ((ClientChatbanState) obj));
             if (obj instanceof ClientChatMessage && user.hasPermission("chat.send")) handleChatMessage(channel, user, ((ClientChatMessage) obj));
             if (obj instanceof ClientChatLookup && user.hasPermission("chat.lookup")) handleChatLookup(channel, user, ((ClientChatLookup) obj));
@@ -223,7 +222,7 @@ public class PacketHandler {
                     broadcastPixelUpdate(lastPixel.x, lastPixel.y, lastPixel.color);
                     ackUndo(user, lastPixel.x, lastPixel.y);
                 } else {
-                    byte defaultColor = App.getDefaultColor(thisPixel.x, thisPixel.y);
+                    byte defaultColor = App.getDefaultPixel(thisPixel.x, thisPixel.y);
                     App.getDatabase().putUserUndoPixel(thisPixel.x, thisPixel.y, defaultColor, user, thisPixel.id);
                     user.decreasePixelCounts();
                     App.putPixel(thisPixel.x, thisPixel.y, defaultColor, user, false, ip, false, "user undo");
@@ -263,36 +262,11 @@ public class PacketHandler {
                         server.send(channel, new ServerCaptchaRequired());
                     } else {
                         int c = App.getPixel(cp.getX(), cp.getY());
-                        boolean isInsidePlacemap = false;
-                        if (App.getHavePlacemap()) {
-                            int placemapType = App.getPlacemap(cp.getX(), cp.getY());
-                            switch (placemapType) {
-                                case 0:
-                                    // Allow normal placement
-                                    isInsidePlacemap = c != cp.getColor();
-                                    break;
-                                case 2:
-                                    // Allow tendril placement
-                                    int top = App.getPixel(cp.getX(), cp.getY() + 1);
-                                    int left = App.getPixel(cp.getX() - 1, cp.getY());
-                                    int right = App.getPixel(cp.getX() + 1, cp.getY());
-                                    int bottom = App.getPixel(cp.getX(), cp.getY() - 1);
-
-                                    int defaultTop = App.getDefaultColor(cp.getX(), cp.getY() + 1);
-                                    int defaultLeft = App.getDefaultColor(cp.getX() - 1, cp.getY());
-                                    int defaultRight = App.getDefaultColor(cp.getX() + 1, cp.getY());
-                                    int defaultBottom = App.getDefaultColor(cp.getX(), cp.getY() - 1);
-                                    if (top != defaultTop || left != defaultLeft || right != defaultRight || bottom != defaultBottom) {
-                                        // The pixel has at least one other attached pixel
-                                        isInsidePlacemap = c != cp.getColor() && c != 0xFF && c != -1;
-                                    }
-                                    break;
-                            }
-                        } else {
-                            isInsidePlacemap = c != cp.getColor() && c != 0xFF && c != -1;
-                        }
+                        boolean isInsidePlacemap = App.getCanPlace(cp.getX(), cp.getY());
+                        boolean isColorDifferent = c != cp.getColor();
+                        
                         int c_old = c;
-                        if (user.hasIgnorePlacemap() || isInsidePlacemap) {
+                        if (user.hasIgnorePlacemap() || (isInsidePlacemap && isColorDifferent)) {
                             int seconds = getCooldown();
                             if (c_old != 0xFF && c_old != -1 && App.getDatabase().shouldPixelTimeIncrease(user.getId(), cp.getX(), cp.getY()) && App.getConfig().getBoolean("backgroundPixel.enabled")) {
                                 seconds = (int)Math.round(seconds * App.getConfig().getDouble("backgroundPixel.multiplier"));
@@ -311,7 +285,6 @@ public class PacketHandler {
                             } else {
                                 boolean modAction = cp.getColor() == 0xFF || user.hasIgnoreCooldown() || (user.hasIgnorePlacemap() && !isInsidePlacemap);
                                 App.putPixel(cp.getX(), cp.getY(), cp.getColor(), user, modAction, ip, true, "");
-                                App.saveMap();
                                 broadcastPixelUpdate(cp.getX(), cp.getY(), cp.getColor());
                                 ackPlace(user, cp.getX(), cp.getY());
                                 sendPixelCountUpdate(user);
@@ -388,57 +361,6 @@ public class PacketHandler {
 
     public void handleChatbanState(WebSocketChannel channel, User user, ClientChatbanState clientChatbanState) {
         server.send(channel, new ServerChatbanState(user.isPermaChatbanned(), user.getChatbanReason(), user.getChatbanExpiryTime()));
-    }
-
-    public void handleChatHistory(WebSocketChannel channel, User user, ClientChatHistory clientChatHistory) {
-        boolean includePurged = user.hasPermission("chat.history.purged");
-        var messages = App.getDatabase().getLastXMessages(100, includePurged).stream()
-                .map(dbChatMessage -> {
-                    List<Badge> badges = new ArrayList<>();
-                    String authorName = "CONSOLE";
-                    int nameColor = 0;
-                    Faction faction = null;
-                    List<String> nameClass = null;
-                    if (dbChatMessage.author_uid > 0) {
-                        authorName = "$Unknown";
-                        User author = App.getUserManager().getByID(dbChatMessage.author_uid);
-                        if (author != null) {
-                            authorName = author.getName();
-                            badges = author.getChatBadges();
-                            nameColor = author.getChatNameColor();
-                            nameClass = author.getChatNameClasses();
-                            faction = author.fetchDisplayedFaction();
-                        }
-                    }
-                    var message = new ChatMessage(
-                        dbChatMessage.id,
-                        authorName,
-                        dbChatMessage.sent,
-                        App.getConfig().getBoolean("textFilter.enabled") && dbChatMessage.filtered_content.length() > 0
-                            ? dbChatMessage.filtered_content
-                            : dbChatMessage.content,
-                        dbChatMessage.replying_to_id,
-                        dbChatMessage.reply_should_mention,
-                        dbChatMessage.purged
-                            ? new ChatMessage.Purge(dbChatMessage.purged_by_uid, dbChatMessage.purge_reason)
-                            : null,
-                        badges,
-                        nameClass,
-                        nameColor,
-                        dbChatMessage.author_was_shadow_banned,
-                        faction
-                    );
-                    if (user.isShadowBanned() && dbChatMessage.author_uid == user.getId()) {
-                        message = message.asShadowBanned();
-                    }
-                    if (!includePurged && App.getSnipMode()) {
-                        message = message.asSnipRedacted();
-                    }
-                    return message;
-                })
-                .filter(message -> !message.getAuthorWasShadowBanned() || user.hasPermission("chat.history.shadowbanned"))
-                .collect(Collectors.toList());
-        server.send(channel, new ServerChatHistory(messages));
     }
 
     public void handleChatMessage(WebSocketChannel channel, User user, ClientChatMessage clientChatMessage) {
